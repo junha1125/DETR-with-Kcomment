@@ -312,7 +312,7 @@ def build(args):
     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
     
     ## num_classes 정의해주기
-    num_classes = 91 if args.dataset_file = 'coco' else 20 # coco_class = 20 + 1 (non object)
+    num_classes = 20 if args.dataset_file != 'coco' else 91 # coco_class = 20 + 1 (non object)
     if args.dataset_file == "coco_panoptic":
         # for panoptic, we just add a num_classes that is large enough to hold
         # max_obj_id + 1, but the exact value doesn't really matter (정확한 값이 들어가야하는게 중요한 것이 아니다.)
