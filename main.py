@@ -1,7 +1,16 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
-# ,"args": ["--batch_size", "1", "--no_aux_loss", "--eval", "--resume", "https://dl.fbaipublicfiles.com/detr/detr-r50-e632da11.pth", "--coco_path", "/workspace/coco"]
+"""
+,
+            "args" : ["--batch_size", "2", 
+                "--no_aux_loss", 
+                "--eval", 
+                "--resume", "checkpoints/detr-r50-e632da11.pth", 
+                "--num_workers", "4",
+                "--world_size", "2",
+                "--coco_path", "/dataset/coco",
+                "--output_dir", "result"]
+"""
 # 아래 코드 주석에서 ## 으로 적어 놓은 주석은, 내가 적은 주석. 영어 말고 최대한 한글로 적어 놓기. 미래의 나를 위해서
-
 import argparse
 import datetime
 import json
@@ -18,6 +27,7 @@ import util.misc as utils
 from datasets import build_dataset, get_coco_api_from_dataset
 from engine import evaluate, train_one_epoch
 from models import build_model
+from via import via
 
 
 def get_args_parser():
@@ -38,7 +48,7 @@ def get_args_parser():
     parser.add_argument('--backbone', default='resnet50', type=str,
                         help="Name of the convolutional backbone to use")
     parser.add_argument('--dilation', action='store_true',
-                        help="If true, we replace stride with dilation in the last convolutional block (DC5)")
+                        help="If true, we replace stride with dilation in the last convolutional block (DC5)") # stride를 적용하지 않고, dilation을 추가해서 backbone output resolution을 높힌다.
     parser.add_argument('--position_embedding', default='sine', type=str, choices=('sine', 'learned'),
                         help="Type of positional embedding to use on top of the image features")
 
@@ -65,7 +75,8 @@ def get_args_parser():
 
     # Loss
     parser.add_argument('--no_aux_loss', dest='aux_loss', action='store_false',
-                        help="Disables auxiliary decoding losses (loss at each layer)")
+                        help="Disables auxiliary decoding losses (loss at each layer)")  # args.aux_loss == false
+                        
     # * Matcher
     parser.add_argument('--set_cost_class', default=1, type=float,
                         help="Class coefficient in the matching cost")
@@ -73,6 +84,7 @@ def get_args_parser():
                         help="L1 box coefficient in the matching cost")
     parser.add_argument('--set_cost_giou', default=2, type=float,
                         help="giou box coefficient in the matching cost")
+
     # * Loss coefficients
     parser.add_argument('--mask_loss_coef', default=1, type=float)
     parser.add_argument('--dice_loss_coef', default=1, type=float)
@@ -96,7 +108,7 @@ def get_args_parser():
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--eval', action='store_true')
-    parser.add_argument('--num_workers', default=2, type=int)
+    parser.add_argument('--num_workers', default=2, type=int) # 
 
     # distributed training parameters
     parser.add_argument('--world_size', default=1, type=int,
@@ -106,8 +118,7 @@ def get_args_parser():
 
 
 def main(args):
-    utils.init_distributed_mode(args) # # setup_for_distributed 가 가능하다면, args.gpu / args.world_size / args.rank 가 여기서 정의 된다.
-    args.junha = 1
+    utils.init_distributed_mode(args) # Multi-GPU 사용할 거라면, args.gpu / args.world_size / args.rank 가 여기서 정의 된다.
     print("git:\n  {}\n".format(utils.get_sha()))
 
     if args.frozen_weights is not None:
@@ -116,8 +127,7 @@ def main(args):
 
     device = torch.device(args.device)
 
-    # fix the seed for reproducibility 
-    ## setup_for_distributed 가 가능하다면
+    # Multi-GPU 사용할 거라면, fix the seed for reproducibility 
     seed = args.seed + utils.get_rank() 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -150,7 +160,9 @@ def main(args):
     optimizer = torch.optim.AdamW(param_dicts, lr=args.lr, weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop)
 
-    ## data_loader 만들어 주기 - 1. dataset 정의 , 2. batchSampler 정의 
+    ## data_loader 만들어 주기 
+    # train -> dataset -> RandomSampler -> BatchSampler -> DataLoader
+    # val -> dataset -> SequentialSampler -> DataLoader(+batch_size)
     dataset_train = build_dataset(image_set='train', args=args)
     dataset_val = build_dataset(image_set='val', args=args)
 
@@ -161,10 +173,13 @@ def main(args):
         sampler_train = torch.utils.data.RandomSampler(dataset_train)
         sampler_val = torch.utils.data.SequentialSampler(dataset_val)
 
+    # data_loader에서는 1장씩만 뱉어주면 된다. BatchSampler가 Batch로 묶어 준다.
     batch_sampler_train = torch.utils.data.BatchSampler( sampler_train, args.batch_size, drop_last=True)
 
+    # 특히 data_loader_train에서 batch_size를 정의하지 않고, BatchSampler라는 함수를 사용했다.
+    # utils.collate_fn 함수에 의해서, (image, label) -> (NestedTensor(tensor,mask), label) 로 바뀐다
     data_loader_train = DataLoader(dataset_train, batch_sampler=batch_sampler_train,
-                                   collate_fn=utils.collate_fn, num_workers=args.num_workers)
+                                   collate_fn=utils.collate_fn, num_workers=args.num_workers) 
     data_loader_val = DataLoader(dataset_val, args.batch_size, sampler=sampler_val,
                                  drop_last=False, collate_fn=utils.collate_fn, num_workers=args.num_workers)
 
@@ -176,7 +191,7 @@ def main(args):
     else:
         base_ds = get_coco_api_from_dataset(dataset_val)
 
-    ## Model Parameters load 하기(1) - frozen_weights 경로가 있을 경우
+    ## Model Parameters load 하기(1) - frozen_weights. panoptic segmentaion 모듈만 학습시키고 싶다면
     if args.frozen_weights is not None:
         checkpoint = torch.load(args.frozen_weights, map_location='cpu')
         model_without_ddp.detr.load_state_dict(checkpoint['model'])
@@ -266,3 +281,5 @@ if __name__ == '__main__':
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     main(args)
+
+

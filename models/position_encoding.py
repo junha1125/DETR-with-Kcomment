@@ -16,36 +16,38 @@ class PositionEmbeddingSine(nn.Module):
     """
     def __init__(self, num_pos_feats=64, temperature=10000, normalize=False, scale=None):
         super().__init__()
-        self.num_pos_feats = num_pos_feats
-        self.temperature = temperature
-        self.normalize = normalize
+        self.num_pos_feats = num_pos_feats # Dimension of vector
+        self.temperature = temperature # 10000 = period
+        self.normalize = normalize # flase
         if scale is not None and normalize is False:
             raise ValueError("normalize should be True if scale is passed")
         if scale is None:
             scale = 2 * math.pi
-        self.scale = scale
+        self.scale = scale # 2*pi
 
     def forward(self, tensor_list: NestedTensor):
         x = tensor_list.tensors
         mask = tensor_list.mask
         assert mask is not None
         not_mask = ~mask
-        y_embed = not_mask.cumsum(1, dtype=torch.float32)
-        x_embed = not_mask.cumsum(2, dtype=torch.float32)
+        # 나의 코드에서 pos = np.arange(256) 값
+        y_embed = not_mask.cumsum(1, dtype=torch.float32) # torch.Size([2, 28, 38])
+        x_embed = not_mask.cumsum(2, dtype=torch.float32) 
         if self.normalize:
             eps = 1e-6
             y_embed = y_embed / (y_embed[:, -1:, :] + eps) * self.scale
             x_embed = x_embed / (x_embed[:, :, -1:] + eps) * self.scale
 
         dim_t = torch.arange(self.num_pos_feats, dtype=torch.float32, device=x.device)
-        dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_pos_feats)
+        dim_t = self.temperature ** (2 * (dim_t // 2) / self.num_pos_feats) # (128). 논문과 나의 코드에서 w 값. for i in range(num_vector) 모두 담음
 
-        pos_x = x_embed[:, :, :, None] / dim_t
-        pos_y = y_embed[:, :, :, None] / dim_t
-        pos_x = torch.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4).flatten(3)
-        pos_y = torch.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4).flatten(3)
-        pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2)
-        return pos
+        # # x_embed[:, :, :, None] = reshape torch.Size([2, 28, 38, 1]) = x_embed.unsqueeze(dim=3)
+        pos_x = x_embed[:, :, :, None] / dim_t  # ([2, 28, 38, 128]) # 여기서 28은 모두 같은 값이고, 결국 만들어진 것은 38*128이다. # via(pos_x)
+        pos_y = y_embed[:, :, :, None] / dim_t                       # 여기서 38은 모두 같은 값이고, 결국 만들어진 것은 38*128이다. # via(pos_y.permute(0,2,1,4))
+        pos_x = torch.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4).flatten(3) # (2,28,38,128)
+        pos_y = torch.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4).flatten(3) # (2,28,38,128)
+        pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2) # (2,28,38,256) -> (2,256,28,38)
+        return pos # torch.Size([2, 256, 28, 34])
 
 
 class PositionEmbeddingLearned(nn.Module):

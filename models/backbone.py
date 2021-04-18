@@ -76,7 +76,8 @@ class BackboneBase(nn.Module):
             m = tensor_list.mask
             assert m is not None
             mask = F.interpolate(m[None].float(), size=x.shape[-2:]).to(torch.bool)[0]
-            out[name] = NestedTensor(x, mask)
+            out[name] = NestedTensor(x, mask) 
+            # backbone의 중간 feature map = c0 c1 c2 c3들에게 맞는 resolution의 mask를 각자 만들어서 넣준다.
         return out
 
 
@@ -92,19 +93,19 @@ class Backbone(BackboneBase):
         num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
         super().__init__(backbone, train_backbone, num_channels, return_interm_layers)
 
-
+#
 class Joiner(nn.Sequential):
     def __init__(self, backbone, position_embedding):
         super().__init__(backbone, position_embedding)
 
     def forward(self, tensor_list: NestedTensor):
-        xs = self[0](tensor_list)
+        xs = self[0](tensor_list) # self.backbone(tensor_list)
         out: List[NestedTensor] = []
         pos = []
         for name, x in xs.items():
             out.append(x)
             # position encoding
-            pos.append(self[1](x).to(x.tensors.dtype))
+            pos.append(self[1](x).to(x.tensors.dtype)) # self.position_embedding(x)
 
         return out, pos
 
@@ -113,7 +114,7 @@ def build_backbone(args):
     position_embedding = build_position_encoding(args)
     train_backbone = args.lr_backbone > 0
     return_interm_layers = args.masks
-    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation)
+    backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation) # torchvision.models
     model = Joiner(backbone, position_embedding)
     model.num_channels = backbone.num_channels
     return model

@@ -266,12 +266,14 @@ def get_sha():
 
 
 def collate_fn(batch):
+    # batch[0] : len이 batch_size인 tuple. Image 정보 들어가 있다. batch[0][0]에는 torch tensor가 들어가 있다.
+    # batch[1] : len이 batch_size인 tuple. label 정보 들어가 있다. batch[1][0]에는 dict()가 들어가 있다. dict_keys(['boxes', 'labels', 'image_id', 'area', 'iscrowd', 'orig_size', 'size'])
     batch = list(zip(*batch))
     batch[0] = nested_tensor_from_tensor_list(batch[0])
     return tuple(batch)
 
 
-def _max_by_axis(the_list):
+def _max_by_axis(the_list): 
     # type: (List[List[int]]) -> List[int]
     maxes = the_list[0]
     for sublist in the_list[1:]:
