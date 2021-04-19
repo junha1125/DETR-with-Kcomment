@@ -33,9 +33,9 @@ class DETR(nn.Module):
         super().__init__()
         self.num_queries = num_queries
         self.transformer = transformer
-        hidden_dim = transformer.d_model
-        self.class_embed = nn.Linear(hidden_dim, num_classes + 1)
-        self.bbox_embed = MLP(hidden_dim, hidden_dim, 4, 3)
+        hidden_dim = transformer.d_model # 256
+        self.class_embed = nn.Linear(hidden_dim, num_classes + 1) # 91 + 1 -> 92
+        self.bbox_embed = MLP(hidden_dim, hidden_dim, output_dim=4, num_layers=3)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
         self.input_proj = nn.Conv2d(backbone.num_channels, hidden_dim, kernel_size=1)
         self.backbone = backbone
@@ -59,14 +59,17 @@ class DETR(nn.Module):
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
         features, pos = self.backbone(samples)  # torch.Size([2, 2048, 34, 34]) / torch.Size([2, 256, 34, 34])
+        # features[0].tensors.shape = torch.Size([2, 2048, 28, 38]) features[0].mask 있음
+        # pos[0].shape = torch.Size([2, 256, 28, 38])
 
         src, mask = features[-1].decompose()
         assert mask is not None
-        hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
+        hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0] 
+        # hs = tuple(decoder 결과 : Size([6, 100, 2, 256]), encoder 결과 : torch.Size([2, 256, 28, 38]))
 
-        outputs_class = self.class_embed(hs)
-        outputs_coord = self.bbox_embed(hs).sigmoid()
-        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
+        outputs_class = self.class_embed(hs) # ([6, 2 batch, 100개 object, 92개 class])
+        outputs_coord = self.bbox_embed(hs).sigmoid() # ([6, 2, 100, 4])
+        out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]} # [-1]: 가장 마지막 decoder layer결과만 사용
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
         return out
@@ -135,8 +138,9 @@ class SetCriterion(nn.Module):
         device = pred_logits.device
         tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)
         # Count the number of predictions that are NOT "no-object" (which is the last class)
-        card_pred = (pred_logits.argmax(-1) != pred_logits.shape[-1] - 1).sum(1)
-        card_err = F.l1_loss(card_pred.float(), tgt_lengths.float())
+        card_pred = (pred_logits.argmax(-1) != pred_logits.shape[-1] - 1).sum(1) 
+        # bacth-img0에 대한 100개의 예측 중 score만 고려해서 argmax값이 no-object를 가리키지 않는(object라고 판단된 예측된) 것의 갯수 
+        card_err = F.l1_loss(card_pred.float(), tgt_lengths.float()) # 실제 각 이미지당 object의 갯수와 비교한 L1 loss추출
         losses = {'cardinality_error': card_err}
         return losses
 
@@ -157,7 +161,7 @@ class SetCriterion(nn.Module):
 
         loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
             box_ops.box_cxcywh_to_xyxy(src_boxes),
-            box_ops.box_cxcywh_to_xyxy(target_boxes)))
+            box_ops.box_cxcywh_to_xyxy(target_boxes)))  # diag (size(21, 21)) = (21,)
         losses['loss_giou'] = loss_giou.sum() / num_boxes
         return losses
 
@@ -210,7 +214,7 @@ class SetCriterion(nn.Module):
             'masks': self.loss_masks
         }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
-        return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
+        return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs) # forward 진행
 
     def forward(self, outputs, targets):
         """ This performs the loss computation.
@@ -225,15 +229,15 @@ class SetCriterion(nn.Module):
         indices = self.matcher(outputs_without_aux, targets)
 
         # Compute the average number of target boxes accross all nodes, for normalization purposes
-        num_boxes = sum(len(t["labels"]) for t in targets)
-        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device)
+        num_boxes = sum(len(t["labels"]) for t in targets) # img1 num_box + img2 num_box
+        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=next(iter(outputs.values())).device) # img1 num_box + img2 num_box
         if is_dist_avail_and_initialized():
             torch.distributed.all_reduce(num_boxes)
-        num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
+        num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item() # 총 GPU 갯수로 나준다.
 
         # Compute all the requested losses
         losses = {}
-        for loss in self.losses:
+        for loss in self.losses: # type(loss) = (str)
             losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
@@ -319,7 +323,7 @@ def build(args):
         num_classes = 250
     device = torch.device(args.device)
 
-    ## backbone 그리고 transformer 정의해주기
+    ## backbone과 transformer 정의해주기
     backbone = build_backbone(args)
     transformer = build_transformer(args)
 
@@ -333,7 +337,7 @@ def build(args):
     )
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
-    matcher = build_matcher(args)
+    matcher = build_matcher(args) # matching index가 반환된다.
     weight_dict = {'loss_ce': 1, 'loss_bbox': args.bbox_loss_coef}
     weight_dict['loss_giou'] = args.giou_loss_coef
     if args.masks:

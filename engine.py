@@ -90,8 +90,8 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(samples)
-        loss_dict = criterion(outputs, targets)
+        outputs = model(samples) # ['pred_logits'] ([2, 100, 92]),['pred_boxes'] ([2, 100, 4])
+        loss_dict = criterion(outputs, targets) 
         weight_dict = criterion.weight_dict
 
         # reduce losses over all GPUs for logging purposes
@@ -124,6 +124,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
 
             panoptic_evaluator.update(res_pano)
 
+    # 2500개의 validataion 값이 모든 계산된 이후에 아래의 작업이 수행된다.
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)

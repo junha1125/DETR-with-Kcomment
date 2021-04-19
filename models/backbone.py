@@ -78,6 +78,7 @@ class BackboneBase(nn.Module):
             mask = F.interpolate(m[None].float(), size=x.shape[-2:]).to(torch.bool)[0]
             out[name] = NestedTensor(x, mask) 
             # backbone의 중간 feature map = c0 c1 c2 c3들에게 맞는 resolution의 mask를 각자 만들어서 넣준다.
+            # eval 할 때는 return_layers = {'layer4': "0"} 만 나온다. 
         return out
 
 
@@ -100,6 +101,8 @@ class Joiner(nn.Sequential):
 
     def forward(self, tensor_list: NestedTensor):
         xs = self[0](tensor_list) # self.backbone(tensor_list)
+        # xs['0'].tensors.shape = torch.Size([2, 2048, 28, 38])
+        # 만약에 resnet 중간에 feature map을 뽑아 왔다면, xs['1'], xs['2'], xs['3'] 순차적으로 저장된다.
         out: List[NestedTensor] = []
         pos = []
         for name, x in xs.items():
@@ -107,14 +110,24 @@ class Joiner(nn.Sequential):
             # position encoding
             pos.append(self[1](x).to(x.tensors.dtype)) # self.position_embedding(x)
 
+        # 여기서 0은 backbone에서 가장 마지막 C4 layer에서 뽑은 결과
+        # out[0].tensors.shape = torch.Size([2, 2048, 28, 38]). out[0].mask 있음
+        # pos[0].shape = torch.Size([2, 256, 28, 38])
         return out, pos
 
 
 def build_backbone(args):
+    # 핵심 module 정의 1. position_embedding
     position_embedding = build_position_encoding(args)
+    
+    # 핵심 module 정의 2. backbone
     train_backbone = args.lr_backbone > 0
     return_interm_layers = args.masks
     backbone = Backbone(args.backbone, train_backbone, return_interm_layers, args.dilation) # torchvision.models
+
+    # nn.Sequential 로 2개의 모듈 묶어주기
     model = Joiner(backbone, position_embedding)
+
+    # model의 type은 nn.Sequential 이기 때문에, 아무런 맴버변수가 없다. 아래에 의해서 클래서 맴버변수 하나 만들어 놓음
     model.num_channels = backbone.num_channels
     return model
