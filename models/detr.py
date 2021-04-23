@@ -62,17 +62,20 @@ class DETR(nn.Module):
         # features[0].tensors.shape = torch.Size([2, 2048, 28, 38]) features[0].mask 있음
         # pos[0].shape = torch.Size([2, 256, 28, 38])
 
+
+
+
         src, mask = features[-1].decompose()
         assert mask is not None
         hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0] 
-        # hs = tuple(decoder 결과 : Size([6, 100, 2, 256]), encoder 결과 : torch.Size([2, 256, 28, 38]))
+        # hs = tuple(decoder 결과 : Size([6, 100, 2, 256]), encoder 결과 : torch.Size([2, 256, 28, 38]))[0]
 
         outputs_class = self.class_embed(hs) # ([6, 2 batch, 100개 object, 92개 class])
         outputs_coord = self.bbox_embed(hs).sigmoid() # ([6, 2, 100, 4])
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]} # [-1]: 가장 마지막 decoder layer결과만 사용
         if self.aux_loss:
             out['aux_outputs'] = self._set_aux_loss(outputs_class, outputs_coord)
-        return out
+        return out, hs[-1].squeeze()  # return out, [100, 256]
 
     @torch.jit.unused
     def _set_aux_loss(self, outputs_class, outputs_coord):
@@ -137,7 +140,7 @@ class SetCriterion(nn.Module):
         pred_logits = outputs['pred_logits']
         device = pred_logits.device
         tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)
-        # Count the number of predictions that are NOT "no-object" (which is the last class)
+        # 100개의 예측 중에서 object라고 판단한 갯수가 몇개인지 계산한다.
         card_pred = (pred_logits.argmax(-1) != pred_logits.shape[-1] - 1).sum(1) 
         # bacth-img0에 대한 100개의 예측 중 score만 고려해서 argmax값이 no-object를 가리키지 않는(object라고 판단된 예측된) 것의 갯수 
         card_err = F.l1_loss(card_pred.float(), tgt_lengths.float()) # 실제 각 이미지당 object의 갯수와 비교한 L1 loss추출
@@ -256,7 +259,7 @@ class SetCriterion(nn.Module):
                     l_dict = {k + f'_{i}': v for k, v in l_dict.items()}
                     losses.update(l_dict)
 
-        return losses
+        return losses, indices
 
 
 class PostProcess(nn.Module):

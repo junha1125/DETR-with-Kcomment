@@ -43,7 +43,7 @@ class PositionEmbeddingSine(nn.Module):
 
         # # x_embed[:, :, :, None] = reshape torch.Size([2, 28, 38, 1]) = x_embed.unsqueeze(dim=3)
         pos_x = x_embed[:, :, :, None] / dim_t  # ([2, 28, 38, 128]) # 여기서 28은 모두 같은 값이고, 결국 만들어진 것은 38*128이다. # via(pos_x)
-        pos_y = y_embed[:, :, :, None] / dim_t                       # 여기서 38은 모두 같은 값이고, 결국 만들어진 것은 38*128이다. # via(pos_y.permute(0,2,1,4))
+        pos_y = y_embed[:, :, :, None] / dim_t                       # 여기서 38은 모두 같은 값이고, 결국 만들어진 것은 38*128이다. # via(pos_y.permute(0,2,1,3))
         pos_x = torch.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4).flatten(3) # (2,28,38,128)
         pos_y = torch.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4).flatten(3) # (2,28,38,128)
         pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2) # (2,28,38,256) -> (2,256,28,38)

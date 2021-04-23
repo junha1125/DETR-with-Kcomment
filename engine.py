@@ -69,7 +69,15 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
     # data_loader에는 coco val 이미지 5000장에 대한 정보가 들어가 있다. type( util.misc.NestedTensor, dict ) 
     model.eval()
     criterion.eval()
+    """
+    category_query = torch.load('category_query.pth', map_location=torch.device('cpu'))
+    mask = torch.isnan(category_query)
+    category_query[mask] = 0
+    category_query = category_query.cuda(device)
 
+    weight = torch.nn.Parameter( category_query )
+    model.query_embed.weight = weight
+    """
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('class_error', utils.SmoothedValue(window_size=1, fmt='{value:.2f}'))
     header = 'Test:'
@@ -86,14 +94,20 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
             output_dir=os.path.join(output_dir, "panoptic_eval"),
         )
     
-    for samples, targets in metric_logger.log_every(data_loader, 10, header):
+    for samples, targets, paths in metric_logger.log_every(data_loader, 10, header):
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
-        outputs = model(samples) # ['pred_logits'] ([2, 100, 92]),['pred_boxes'] ([2, 100, 4])
-        loss_dict = criterion(outputs, targets) 
+        outputs , decoder_out = model(samples) # ['pred_logits'] ([2, 100, 92]),['pred_boxes'] ([2, 100, 4]) / [100, 256]
+        loss_dict , indices= criterion(outputs, targets) 
         weight_dict = criterion.weight_dict
 
+        """
+        for q_position, label_postion in zip(indices[0][0], indices[0][1]):
+            catagory_number = int(targets[0]['labels'][label_postion])
+            category_query[catagory_number] += decoder_out[q_position].cpu() # class number == targets[0]['labels'][label_postion]
+            class_count[catagory_number] += 1
+        """
         # reduce losses over all GPUs for logging purposes
         loss_dict_reduced = utils.reduce_dict(loss_dict)
         loss_dict_reduced_scaled = {k: v * weight_dict[k]
@@ -104,6 +118,7 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
                              **loss_dict_reduced_scaled,
                              **loss_dict_reduced_unscaled)
         metric_logger.update(class_error=loss_dict_reduced['class_error'])
+
 
         orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
         results = postprocessors['bbox'](outputs, orig_target_sizes)
@@ -123,6 +138,13 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
                 res_pano[i]["file_name"] = file_name
 
             panoptic_evaluator.update(res_pano)
+
+    """
+    for i in range(100):
+        category_query[i] = category_query[i] / (class_count[i])
+    torch.save(category_query, 'category_query.pth')
+    """
+
 
     # 2500개의 validataion 값이 모든 계산된 이후에 아래의 작업이 수행된다.
     # gather the stats from all processes
@@ -150,4 +172,5 @@ def evaluate(model, criterion, postprocessors, data_loader, base_ds, device, out
         stats['PQ_all'] = panoptic_res["All"]
         stats['PQ_th'] = panoptic_res["Things"]
         stats['PQ_st'] = panoptic_res["Stuff"]
+    
     return stats, coco_evaluator

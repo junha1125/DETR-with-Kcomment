@@ -27,7 +27,8 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         img, target = self.prepare(img, target)
         if self._transforms is not None:
             img, target = self._transforms(img, target)
-        return img, target
+        path = self.coco.loadImgs(self.ids[idx])[0]['file_name']
+        return img, target, path
 
 
 def convert_coco_poly_to_mask(segmentations, height, width):
